@@ -1,0 +1,30 @@
+name: build
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ESP-IDF build
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.1
+          target: esp32s2
+          path: '.'
+      - name: Collect flashable binaries
+        run: |
+          mkdir -p out
+          cp build/flipper_wifi_bridge.bin out/
+          cp build/bootloader/bootloader.bin out/
+          cp build/partition_table/partition-table.bin out/
+          # record the exact flash offsets for ESP Flasher
+          grep -E 'bootloader.bin|partition-table.bin|flipper_wifi_bridge.bin' build/flash_args \
+            > out/flash_offsets.txt || cp build/flash_args out/flash_offsets.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flipper-wifi-bridge-bins
+          path: out/
