@@ -1,5 +1,18 @@
-# v1: single app. Dual-boot (factory=Marauder + test=bridge) is a later layout.
-# Name,     Type, SubType,  Offset,   Size
-nvs,        data, nvs,      0x9000,   0x6000
-phy_init,   data, phy,      0xf000,   0x1000
-factory,    app,  factory,  0x10000,  0x200000
+# Dual-boot layout. Matches the Arduino-ESP32 "default" 4MB scheme EXACTLY, so
+# Marauder's prebuilt *_flipper.bin runs unchanged from ota_0 (it expects app0 at
+# 0x10000 and nvs at 0x9000; no phy partition -- phy cal lives in nvs).
+#
+#   ota_0 = Marauder  (default boot: blank otadata boots the first OTA slot)
+#   ota_1 = this WiFi bridge  (773 KB, fits the 1.25 MB slot; Marauder is 1.06 MB)
+#
+# Switch into the bridge: write otadata_ota1.bin to 0xe000 (make_otadata.py).
+# Switch back to Marauder: the bridge rewrites otadata to ota_0 and reboots (:2335),
+# or write otadata_ota0.bin / erase otadata.
+#
+# Name,     Type, SubType,  Offset,    Size
+nvs,        data, nvs,      0x9000,    0x5000
+otadata,    data, ota,      0xe000,    0x2000
+app0,       app,  ota_0,    0x10000,   0x140000
+app1,       app,  ota_1,    0x150000,  0x140000
+spiffs,     data, spiffs,   0x290000,  0x160000
+coredump,   data, coredump, 0x3F0000,  0x10000

@@ -21,9 +21,12 @@ jobs:
           cp build/flipper_wifi_bridge.bin out/
           cp build/bootloader/bootloader.bin out/
           cp build/partition_table/partition-table.bin out/
-          # record the exact flash offsets for ESP Flasher
+          # otadata selectors (switch INTO the bridge; switch back is wireless :2335)
+          python3 make_otadata.py && cp otadata_ota0.bin otadata_ota1.bin otadata_ota1_altcrc.bin out/
+          # record the exact flash offsets IDF used for our own artifacts
           grep -E 'bootloader.bin|partition-table.bin|flipper_wifi_bridge.bin' build/flash_args \
             > out/flash_offsets.txt || cp build/flash_args out/flash_offsets.txt
+          cp FLASH_DUALBOOT.md out/ 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         with:
           name: flipper-wifi-bridge-bins

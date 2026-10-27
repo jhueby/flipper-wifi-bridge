@@ -31,6 +31,9 @@
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "lwip/sockets.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
+#include "esp_system.h"
 
 #define TAG "bridge"
 
@@ -39,6 +42,7 @@
 #define AP_CHANNEL    6
 #define TCP_PORT      2333
 #define LOG_PORT      2334
+#define CTRL_PORT     2335   // connect here to reboot into Marauder (ota_0)
 
 #define LINK_UART     UART_NUM_1
 #define PIN_TX        43
@@ -259,6 +263,35 @@ static void log_task(void *arg) {
     }
 }
 
+// ---------- control server: hop back to Marauder (ota_0) ----------
+// Any TCP connect to :2335 points otadata at ota_0 and reboots, so you can leave
+// the bridge and return to Marauder WIRELESSLY (no USB, no download mode).
+//   python -c "import socket; socket.create_connection(('192.168.4.1',2335)).recv(64)"
+static void ctrl_task(void *arg) {
+    int ls = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(CTRL_PORT),
+                             .sin_addr.s_addr = htonl(INADDR_ANY) };
+    int one = 1; setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    bind(ls, (struct sockaddr*)&a, sizeof(a));
+    listen(ls, 1);
+    logb("ctrl: listening on %d (connect = boot Marauder)\n", CTRL_PORT);
+    while (1) {
+        int c = accept(ls, NULL, NULL);
+        if (c < 0) continue;
+        const esp_partition_t *m = esp_partition_find_first(
+            ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, NULL);
+        if (!m) { const char *e = "no ota_0 partition\n"; send(c, e, strlen(e), 0); close(c); continue; }
+        esp_err_t r = esp_ota_set_boot_partition(m);
+        char msg[96];
+        int n = snprintf(msg, sizeof(msg), "boot->ota_0 (Marauder) %s; rebooting\n",
+                         r == ESP_OK ? "OK" : esp_err_to_name(r));
+        send(c, msg, n, 0);
+        logb("ctrl: %s", msg);
+        close(c);
+        if (r == ESP_OK) { vTaskDelay(pdMS_TO_TICKS(300)); esp_restart(); }
+    }
+}
+
 // ---------- WiFi SoftAP ----------
 static void wifi_softap(void) {
     ESP_ERROR_CHECK(esp_netif_init());
@@ -296,7 +329,10 @@ void app_main(void) {
     uart_set_pin(LINK_UART, PIN_TX, PIN_RX, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 
     wifi_softap();
-    xTaskCreate(log_task, "log", 4096, NULL, 4, NULL);
-    xTaskCreate(tcp_task, "tcp", 8192, NULL, 6, NULL);
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    if (run) logb("boot: running from %s @ 0x%06lx\n", run->label, (unsigned long)run->address);
+    xTaskCreate(log_task,  "log",  4096, NULL, 4, NULL);
+    xTaskCreate(tcp_task,  "tcp",  8192, NULL, 6, NULL);
+    xTaskCreate(ctrl_task, "ctrl", 4096, NULL, 4, NULL);
     xTaskCreate(expansion_task, "exp", 8192, NULL, 5, NULL);
 }
