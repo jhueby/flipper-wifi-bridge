@@ -293,26 +293,28 @@ static void ctrl_task(void *arg) {
 }
 
 // ---------- WiFi SoftAP ----------
-// Returns false (instead of aborting) on any failure, so app_main can signal the
-// failure on the LED rather than silently panicking with no console.
-#define WCHK(x, tag) do { esp_err_t _r = (x); \
-    if (_r != ESP_OK) { logb("wifi: %s fail: %s\n", tag, esp_err_to_name(_r)); return false; } } while (0)
-static bool wifi_softap(void) {
-    WCHK(esp_netif_init(), "netif_init");
-    WCHK(esp_event_loop_create_default(), "event_loop");
+// Returns 0 on success, else the 1-based index of the call that failed, so
+// app_main can BLINK that number on the LED (no console or WiFi needed to report
+// it). Step map: 1 netif_init, 2 event_loop, 3 wifi_init, 4 set_mode,
+// 5 set_config, 6 wifi_start.
+#define WCHK(x, step) do { esp_err_t _r = (x); \
+    if (_r != ESP_OK) { logb("wifi: step %d fail: %s\n", step, esp_err_to_name(_r)); return step; } } while (0)
+static int wifi_softap(void) {
+    WCHK(esp_netif_init(), 1);
+    WCHK(esp_event_loop_create_default(), 2);
     esp_netif_create_default_wifi_ap();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    WCHK(esp_wifi_init(&cfg), "wifi_init");
+    WCHK(esp_wifi_init(&cfg), 3);
     wifi_config_t wc = { 0 };
     strcpy((char*)wc.ap.ssid, AP_SSID); wc.ap.ssid_len = strlen(AP_SSID);
     strcpy((char*)wc.ap.password, AP_PASS);
     wc.ap.channel = AP_CHANNEL; wc.ap.max_connection = 2;
     wc.ap.authmode = WIFI_AUTH_WPA2_PSK;
-    WCHK(esp_wifi_set_mode(WIFI_MODE_AP), "set_mode");
-    WCHK(esp_wifi_set_config(WIFI_IF_AP, &wc), "set_config");
-    WCHK(esp_wifi_start(), "wifi_start");
+    WCHK(esp_wifi_set_mode(WIFI_MODE_AP), 4);
+    WCHK(esp_wifi_set_config(WIFI_IF_AP, &wc), 5);
+    WCHK(esp_wifi_start(), 6);
     logb("wifi: SoftAP '%s' up at 192.168.4.1 (rpc:%d log:%d)\n", AP_SSID, TCP_PORT, LOG_PORT);
-    return true;
+    return 0;
 }
 
 // Boot LED breadcrumbs (each held ~0.6s so they're visible). The LAST colour you
@@ -328,6 +330,9 @@ void app_main(void) {
     led(1, 1, 1);                              // WHITE: app_main entered
     vTaskDelay(pdMS_TO_TICKS(600));
 
+    // Marauder (ota_0) shares this NVS partition; its stored data is the prime
+    // suspect for breaking our WiFi init, so start from a clean NVS every boot.
+    nvs_flash_erase();
     esp_err_t e = nvs_flash_init();
     if (e == ESP_ERR_NVS_NO_FREE_PAGES || e == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         nvs_flash_erase(); nvs_flash_init();
@@ -348,9 +353,17 @@ void app_main(void) {
     led(0, 1, 0);                              // GREEN: uart ok
     vTaskDelay(pdMS_TO_TICKS(600));
 
-    if (!wifi_softap()) {
-        while (1) { led(1,0,1); vTaskDelay(pdMS_TO_TICKS(400));   // MAGENTA blink = wifi failed
-                    led(0,0,0); vTaskDelay(pdMS_TO_TICKS(400)); }
+    int werr = wifi_softap();
+    if (werr != 0) {
+        // WiFi failed: blink RED <werr> times, pause, repeat. Count the blinks to
+        // see which call failed (1 netif,2 event,3 wifi_init,4 mode,5 cfg,6 start).
+        while (1) {
+            for (int i = 0; i < werr; i++) {
+                led(0,0,1); vTaskDelay(pdMS_TO_TICKS(250));
+                led(0,0,0); vTaskDelay(pdMS_TO_TICKS(250));
+            }
+            vTaskDelay(pdMS_TO_TICKS(1500));
+        }
     }
     led(1, 1, 0);                              // YELLOW: wifi up, starting tasks
     vTaskDelay(pdMS_TO_TICKS(600));
