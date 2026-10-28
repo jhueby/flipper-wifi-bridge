@@ -19,6 +19,9 @@ jobs:
         run: |
           mkdir -p out
           cp build/flipper_wifi_bridge.bin out/
+          # .elf + .map so panics/coredumps can be symbolized off-device
+          cp build/flipper_wifi_bridge.elf out/ 2>/dev/null || true
+          cp build/flipper_wifi_bridge.map out/ 2>/dev/null || true
           cp build/bootloader/bootloader.bin out/
           cp build/partition_table/partition-table.bin out/
           # otadata selectors (switch INTO the bridge; switch back is wireless :2335)
