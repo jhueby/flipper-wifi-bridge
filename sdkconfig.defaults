@@ -1,10 +1,18 @@
 # Target: ESP32-S2 (WROVER, 4MB flash)
 CONFIG_IDF_TARGET="esp32s2"
 
-# Console on native USB-CDC so the Flipper-link UART pins (GPIO43/44) stay free.
-CONFIG_ESP_CONSOLE_USB_CDC=y
-# (disable the default UART0 console)
+# No console. The S2 USB-CDC console enumerates unreliably and blocks/stalls early
+# boot; this firmware logs over WiFi (:2334) instead, so the console is pure
+# liability. UART0 console stays off too, keeping the Flipper-link pins (43/44) free.
+CONFIG_ESP_CONSOLE_NONE=y
+# CONFIG_ESP_CONSOLE_USB_CDC is not set
 # CONFIG_ESP_CONSOLE_UART_DEFAULT is not set
+
+# Write a coredump to the coredump partition on panic, so a crash is recoverable
+# over USB download mode (esptool coredump) even with no console.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
 
 # 4MB flash + our custom single-app table (dual-boot table comes later)
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y

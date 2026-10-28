@@ -293,29 +293,47 @@ static void ctrl_task(void *arg) {
 }
 
 // ---------- WiFi SoftAP ----------
-static void wifi_softap(void) {
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+// Returns false (instead of aborting) on any failure, so app_main can signal the
+// failure on the LED rather than silently panicking with no console.
+#define WCHK(x, tag) do { esp_err_t _r = (x); \
+    if (_r != ESP_OK) { logb("wifi: %s fail: %s\n", tag, esp_err_to_name(_r)); return false; } } while (0)
+static bool wifi_softap(void) {
+    WCHK(esp_netif_init(), "netif_init");
+    WCHK(esp_event_loop_create_default(), "event_loop");
     esp_netif_create_default_wifi_ap();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    WCHK(esp_wifi_init(&cfg), "wifi_init");
     wifi_config_t wc = { 0 };
     strcpy((char*)wc.ap.ssid, AP_SSID); wc.ap.ssid_len = strlen(AP_SSID);
     strcpy((char*)wc.ap.password, AP_PASS);
     wc.ap.channel = AP_CHANNEL; wc.ap.max_connection = 2;
     wc.ap.authmode = WIFI_AUTH_WPA2_PSK;
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wc));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    WCHK(esp_wifi_set_mode(WIFI_MODE_AP), "set_mode");
+    WCHK(esp_wifi_set_config(WIFI_IF_AP, &wc), "set_config");
+    WCHK(esp_wifi_start(), "wifi_start");
     logb("wifi: SoftAP '%s' up at 192.168.4.1 (rpc:%d log:%d)\n", AP_SSID, TCP_PORT, LOG_PORT);
+    return true;
 }
 
+// Boot LED breadcrumbs (each held ~0.6s so they're visible). The LAST colour you
+// see before it settles tells you exactly how far boot got:
+//   (dark, nothing)        crash BEFORE app_main (bootloader / early startup)
+//   WHITE then frozen      died in nvs_flash_init
+//   WHITE->BLUE frozen     died creating buffers / UART driver
+//   WHITE->BLUE->GREEN     reached WiFi; GREEN frozen = wifi aborted internally
+//   ...->MAGENTA blinking  wifi_softap() returned an error (caught, see :2334 log)
+//   ...->YELLOW->steady    SUCCESS: AP up; expansion_task then drives blue/green/red
 void app_main(void) {
+    led_init();
+    led(1, 1, 1);                              // WHITE: app_main entered
+    vTaskDelay(pdMS_TO_TICKS(600));
+
     esp_err_t e = nvs_flash_init();
     if (e == ESP_ERR_NVS_NO_FREE_PAGES || e == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         nvs_flash_erase(); nvs_flash_init();
     }
-    led_init(); led(1, 0, 0);
+    led(1, 0, 0);                              // BLUE: nvs ok
+    vTaskDelay(pdMS_TO_TICKS(600));
 
     s_log_mtx = xSemaphoreCreateMutex();
     s_log_sb = xStreamBufferCreate(4096, 1);
@@ -327,8 +345,16 @@ void app_main(void) {
     uart_driver_install(LINK_UART, 2048, 2048, 0, NULL, 0);
     uart_param_config(LINK_UART, &uc);
     uart_set_pin(LINK_UART, PIN_TX, PIN_RX, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    led(0, 1, 0);                              // GREEN: uart ok
+    vTaskDelay(pdMS_TO_TICKS(600));
 
-    wifi_softap();
+    if (!wifi_softap()) {
+        while (1) { led(1,0,1); vTaskDelay(pdMS_TO_TICKS(400));   // MAGENTA blink = wifi failed
+                    led(0,0,0); vTaskDelay(pdMS_TO_TICKS(400)); }
+    }
+    led(1, 1, 0);                              // YELLOW: wifi up, starting tasks
+    vTaskDelay(pdMS_TO_TICKS(600));
+
     const esp_partition_t *run = esp_ota_get_running_partition();
     if (run) logb("boot: running from %s @ 0x%06lx\n", run->label, (unsigned long)run->address);
     xTaskCreate(log_task,  "log",  4096, NULL, 4, NULL);
